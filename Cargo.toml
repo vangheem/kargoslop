@@ -1,0 +1,22 @@
+[package]
+name = "kargoslop"
+version = "0.1.0"
+edition = "2024"
+description = "Native desktop view of Kargo pipelines, Argo CD apps and the Kubernetes resources behind them"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+rune = { git = "https://github.com/anomalyco/rune", rev = "2a44156b21d63b0342a366b26d9222a6edd4622c" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "2a44156b21d63b0342a366b26d9222a6edd4622c" }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "2a44156b21d63b0342a366b26d9222a6edd4622c" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 2

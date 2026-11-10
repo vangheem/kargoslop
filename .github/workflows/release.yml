@@ -1,0 +1,133 @@
+name: Release
+
+# Every push to main refreshes the rolling `latest` prerelease; a `v*` tag publishes a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "v$crate" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml version $crate"; exit 1; }
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Package
+        run: |
+          mkdir -p dist/pkg
+          lipo -create -output dist/pkg/kargoslop \
+            target/aarch64-apple-darwin/release/kargoslop \
+            target/x86_64-apple-darwin/release/kargoslop
+          lipo -info dist/pkg/kargoslop
+          cp README.md LICENSE dist/pkg/
+          tar -C dist/pkg -czf dist/kargoslop-macos-universal.tar.gz .
+          shasum -a 256 dist/kargoslop-macos-universal.tar.gz | sed 's|dist/||' > dist/kargoslop-macos-universal.tar.gz.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: dist/kargoslop-macos-universal.tar.gz*
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir -p dist/pkg
+          cp target/release/kargoslop README.md LICENSE dist/pkg/
+          tar -C dist/pkg -czf dist/kargoslop-linux-x86_64.tar.gz .
+          sha256sum dist/kargoslop-linux-x86_64.tar.gz | sed 's|dist/||' > dist/kargoslop-linux-x86_64.tar.gz.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: dist/kargoslop-linux-x86_64.tar.gz*
+
+  publish:
+    name: Publish
+    needs: [macos, linux]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          logo="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/assets/logo.png"
+          header="<img src=\"$logo\" width=\"96\" alt=\"kargoslop\">"$'\n\n'"Install or upgrade with \`brew install vangheem/tap/kargoslop\` (or \`brew upgrade kargoslop\`)."
+          gh release create "$GITHUB_REF_NAME" dist/* --title "kargoslop $GITHUB_REF_NAME" --notes "$header" --generate-notes --verify-tag
+      - name: Rolling `latest` prerelease
+        if: github.ref == 'refs/heads/main'
+        run: |
+          logo="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/assets/logo.png"
+          notes="<img src=\"$logo\" width=\"96\" alt=\"kargoslop\">"$'\n\n'"Built from ${GITHUB_SHA::7} on main. Replaced on every push to main."
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* --target "$GITHUB_SHA" --prerelease \
+            --title "Latest build (${GITHUB_SHA::7})" --notes "$notes"
+
+  homebrew:
+    name: Update Homebrew tap
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write formula
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          macos=$(cut -d' ' -f1 dist/kargoslop-macos-universal.tar.gz.sha256)
+          linux=$(cut -d' ' -f1 dist/kargoslop-linux-x86_64.tar.gz.sha256)
+          bash .github/scripts/homebrew-formula.sh "$version" "$macos" "$linux" > kargoslop.rb
+          cat kargoslop.rb
+      - name: Push to vangheem/homebrew-tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:vangheem/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp kargoslop.rb tap/Formula/kargoslop.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/kargoslop.rb
+          if git diff --cached --quiet; then
+            echo "Formula unchanged"
+          else
+            git commit -m "kargoslop ${GITHUB_REF_NAME}"
+            git push origin HEAD
+          fi

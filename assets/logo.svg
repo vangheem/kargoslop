@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16324a"/>
+      <stop offset="1" stop-color="#0a1726"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.5">
+      <stop offset="0" stop-color="#7ee06a" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#7ee06a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a3d"/>
+      <stop offset="1" stop-color="#d9601c"/>
+    </linearGradient>
+    <linearGradient id="slop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a6f27a"/>
+      <stop offset="1" stop-color="#4fc23f"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- App-icon squircle -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <circle cx="512" cy="560" r="380" fill="url(#glow)"/>
+
+  <g filter="url(#shadow)">
+    <!-- Shipping container -->
+    <rect x="188" y="372" width="648" height="400" rx="34" fill="url(#box)"/>
+    <!-- Corrugated ribs -->
+    <g fill="#b9501a" opacity="0.55">
+      <rect x="248" y="420" width="26" height="304" rx="13"/>
+      <rect x="320" y="420" width="26" height="304" rx="13"/>
+      <rect x="392" y="420" width="26" height="304" rx="13"/>
+      <rect x="464" y="420" width="26" height="304" rx="13"/>
+      <rect x="536" y="420" width="26" height="304" rx="13"/>
+      <rect x="608" y="420" width="26" height="304" rx="13"/>
+      <rect x="680" y="420" width="26" height="304" rx="13"/>
+      <rect x="752" y="420" width="26" height="304" rx="13"/>
+    </g>
+    <!-- Frame rails -->
+    <rect x="188" y="372" width="648" height="34" rx="17" fill="#ffb366"/>
+    <rect x="188" y="738" width="648" height="34" rx="17" fill="#a8461a"/>
+
+    <!-- Promotion pipeline painted on the side: three stages, left to right -->
+    <path d="M300 572 H724" stroke="#14283c" stroke-width="30" stroke-linecap="round"/>
+    <g fill="#14283c">
+      <circle cx="300" cy="572" r="52"/>
+      <circle cx="512" cy="572" r="52"/>
+      <circle cx="724" cy="572" r="52"/>
+    </g>
+    <g fill="#a6f27a">
+      <circle cx="300" cy="572" r="26"/>
+      <circle cx="512" cy="572" r="26"/>
+    </g>
+    <circle cx="724" cy="572" r="26" fill="none" stroke="#a6f27a" stroke-width="12"/>
+
+    <!-- Slop: a slick on the roof, running over the edge in drips -->
+    <path fill="url(#slop)" d="
+      M228 380
+      C228 330 300 318 360 322
+      C440 300 520 330 600 316
+      C680 304 780 318 800 368
+      C806 384 800 400 786 404
+      C772 408 770 420 770 440
+      C770 486 742 500 724 486
+      C708 474 712 440 708 420
+      C704 404 690 402 676 410
+      C664 418 664 432 664 452
+      C664 520 620 534 604 510
+      C592 490 600 452 594 428
+      C590 410 574 404 560 414
+      C548 424 548 440 546 456
+      C542 486 510 492 500 470
+      C492 450 498 426 484 414
+      C470 404 452 410 446 426
+      C438 446 440 470 426 494
+      C412 520 378 518 370 496
+      C362 476 372 460 364 436
+      C360 420 346 414 334 420
+      C322 428 324 446 318 462
+      C308 490 276 486 272 462
+      C268 444 276 420 262 410
+      C246 400 228 404 228 380 Z"/>
+    <!-- Slop highlights -->
+    <g fill="#e2ffc8" opacity="0.75">
+      <ellipse cx="420" cy="346" rx="54" ry="12"/>
+      <ellipse cx="640" cy="336" rx="34" ry="9"/>
+      <circle cx="396" cy="482" r="8"/>
+    </g>
+    <!-- A drop on its way down -->
+    <path fill="url(#slop)" d="M612 640 C612 640 588 672 588 690 C588 704 599 714 612 714 C625 714 636 704 636 690 C636 672 612 640 612 640 Z" opacity="0.95"/>
+  </g>
+</svg>
