@@ -1,6 +1,6 @@
 [package]
 name = "kargoslop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Native desktop view of Kargo pipelines, Argo CD apps and the Kubernetes resources behind them"
 license = "MIT"
