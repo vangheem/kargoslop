@@ -119,6 +119,10 @@ impl Target {
 
     pub fn events(&self) -> Result<Vec<Event>> {
         let out = self.run(&["events", "--for", &self.resource(), "-o", "json"])?;
+        // kubectl prints nothing at all, not an empty list, when there are no events.
+        if out.trim().is_empty() {
+            return Ok(Vec::new());
+        }
         let v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| anyhow!("couldn't parse events: {e}"))?;
         let s = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
@@ -280,9 +284,99 @@ impl Drop for Stream {
     }
 }
 
+/// Live usage of each pod in a namespace: name → (millicores, bytes). Needs metrics-server.
+pub fn top_pods(
+    context: &str,
+    namespace: &str,
+) -> Result<std::collections::HashMap<String, (u64, u64)>> {
+    let out = run_text(
+        "kubectl",
+        &[
+            "--context",
+            context,
+            "-n",
+            namespace,
+            "top",
+            "pods",
+            "--no-headers",
+            "--request-timeout=15s",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (name, cpu, mem) = (f.next()?, f.next()?, f.next()?);
+            Some((name.to_string(), (millicores(cpu)?, bytes(mem)?)))
+        })
+        .collect())
+}
+
+/// `250m` → 250, `2` → 2000, `1500000n` → 1.
+pub fn millicores(q: &str) -> Option<u64> {
+    if let Some(n) = q.strip_suffix('m') {
+        return n.parse().ok();
+    }
+    if let Some(n) = q.strip_suffix('n') {
+        return n.parse::<u64>().ok().map(|n| n / 1_000_000);
+    }
+    if let Some(n) = q.strip_suffix('u') {
+        return n.parse::<u64>().ok().map(|n| n / 1_000);
+    }
+    q.parse::<f64>().ok().map(|c| (c * 1000.0).round() as u64)
+}
+
+/// `530Mi` → bytes; `1G`, `512Ki`, plain numbers too.
+pub fn bytes(q: &str) -> Option<u64> {
+    let units = [
+        ("Ki", 1u64 << 10),
+        ("Mi", 1 << 20),
+        ("Gi", 1 << 30),
+        ("Ti", 1 << 40),
+        ("k", 1000),
+        ("M", 1_000_000),
+        ("G", 1_000_000_000),
+    ];
+    for (suffix, mult) in units {
+        if let Some(n) = q.strip_suffix(suffix) {
+            return n.parse::<f64>().ok().map(|n| (n * mult as f64) as u64);
+        }
+    }
+    q.parse().ok()
+}
+
+pub fn fmt_cpu(m: u64) -> String {
+    if m >= 1000 {
+        format!("{:.2}", m as f64 / 1000.0)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    } else {
+        format!("{m}m")
+    }
+}
+
+pub fn fmt_mem(b: u64) -> String {
+    let mi = b as f64 / (1u64 << 20) as f64;
+    if mi >= 1024.0 {
+        format!("{:.1}Gi", mi / 1024.0)
+    } else {
+        format!("{mi:.0}Mi")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quantities() {
+        assert_eq!(millicores("250m"), Some(250));
+        assert_eq!(millicores("2"), Some(2000));
+        assert_eq!(bytes("530Mi"), Some(530 << 20));
+        assert_eq!(fmt_cpu(1500), "1.5");
+        assert_eq!(fmt_mem(528 << 20), "528Mi");
+    }
 
     #[test]
     fn matches_contexts_by_suffix() {

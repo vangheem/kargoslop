@@ -32,6 +32,7 @@ type Job = Box<dyn FnOnce(&mut App, &mut Tx) + Send>;
 const PROJECT_ACTIVE: f64 = 5.0;
 const PROJECT_IDLE: f64 = 30.0;
 const APP_REFRESH: f64 = 4.0;
+const USAGE_REFRESH: f64 = 15.0;
 const MAX_LINES: usize = 5000;
 
 #[derive(Clone, PartialEq)]
@@ -72,14 +73,21 @@ struct AppState {
     loading: bool,
     error: Option<String>,
     next: f64,
+    /// Live pod usage from `kubectl top`: pod name → (millicores, bytes).
+    usage: HashMap<String, (u64, u64)>,
+    usage_loading: bool,
+    usage_next: f64,
 }
 
 /// A row of the resources table: a node of an Argo CD app's tree, indented under its owner.
+#[derive(Clone)]
 struct ResRow {
     key: String,
     app: String,
     depth: usize,
     node: Node,
+    /// Pods at or under this row, with their CPU (millicores) and memory (bytes) requests.
+    pods: Vec<(String, u64, u64)>,
 }
 
 struct Selected {
@@ -146,6 +154,9 @@ struct App {
     rows: Vec<ResRow>,
     table: TableState,
     show_all: bool,
+    /// Only resources of this kind (and what they own).
+    kind: Option<String>,
+    kind_open: bool,
     selected: Option<Selected>,
     pane: Pane,
     out: Output,
@@ -193,6 +204,8 @@ fn init() -> App {
         rows: Vec::new(),
         table: TableState::new().key("resources"),
         show_all: false,
+        kind: None,
+        kind_open: false,
         selected: None,
         pane: Pane::Logs,
         out: Output::default(),
@@ -275,6 +288,7 @@ impl App {
         self.promote_pick = None;
         if !same_stage {
             self.tab = StageTab::Resources;
+            self.kind = None;
         }
         self.select(None);
         if let Some(p) = self.projects.get_mut(match &view {
@@ -391,6 +405,45 @@ impl App {
         );
     }
 
+    fn refresh_usage(&mut self, name: &str) {
+        let Ok((context, a)) = self.context(name) else {
+            return;
+        };
+        let ns = a.dest_namespace.clone();
+        let Some(state) = self.apps.get_mut(name) else {
+            return;
+        };
+        state.usage_loading = true;
+        let name = name.to_string();
+        self.bg(
+            move || kube::top_pods(&context, &ns),
+            move |s, res, tx| {
+                let Some(a) = s.apps.get_mut(&name) else {
+                    return;
+                };
+                a.usage_loading = false;
+                a.usage_next = tx.clock() + USAGE_REFRESH;
+                // No metrics-server or no access: requests alone still show.
+                if let Ok(u) = res {
+                    a.usage = u;
+                }
+            },
+        );
+    }
+
+    /// Kinds in the stage's resource trees, workloads first.
+    fn kinds(&self) -> Vec<String> {
+        let mut kinds: Vec<&str> = self
+            .stage_apps()
+            .iter()
+            .filter_map(|a| self.apps.get(a))
+            .flat_map(|a| a.nodes.iter().map(|n| n.kind.as_str()))
+            .collect();
+        kinds.sort_by(|a, b| (kind_rank(a), *a).cmp(&(kind_rank(b), *b)));
+        kinds.dedup();
+        kinds.into_iter().map(str::to_string).collect()
+    }
+
     fn refresh_all(&mut self) {
         for p in self.store.projects.clone() {
             self.refresh_project(&p);
@@ -424,33 +477,65 @@ impl App {
             for list in children.values_mut() {
                 list.sort_by(|a, b| b.created.cmp(&a.created).then(a.name.cmp(&b.name)));
             }
-            fn walk<'a>(
-                n: &'a Node,
-                depth: usize,
-                app: &str,
+            /// Pods at or under `n`, with their requests from Argo CD's info.
+            fn pods(n: &Node, children: &HashMap<&str, Vec<&Node>>) -> Vec<(String, u64, u64)> {
+                if n.kind == "Pod" {
+                    let q = |k: &str| n.info(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                    // Argo CD reports CPU in millicores and memory in millibytes.
+                    return vec![(n.name.clone(), q("cpu"), q("memory") / 1000)];
+                }
+                children
+                    .get(n.uid.as_str())
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|c| pods(c, children))
+                    .collect()
+            }
+            struct Walk<'a, 'b> {
+                app: &'b str,
                 all: bool,
-                children: &HashMap<&str, Vec<&'a Node>>,
-                rows: &mut Vec<ResRow>,
-            ) {
-                let kids = children.get(n.uid.as_str());
-                if !all && n.kind == "ReplicaSet" && kids.is_none_or(|k| k.is_empty()) {
+                kind: Option<&'b str>,
+                children: &'b HashMap<&'a str, Vec<&'a Node>>,
+            }
+            /// `inside`: an ancestor matched the kind filter, so this row shows.
+            fn walk(w: &Walk, n: &Node, depth: usize, inside: bool, rows: &mut Vec<ResRow>) {
+                let kids = w.children.get(n.uid.as_str());
+                if !w.all && n.kind == "ReplicaSet" && kids.is_none_or(|k| k.is_empty()) {
                     return;
                 }
-                rows.push(ResRow {
-                    key: format!("{app}|{}", n.uid),
-                    app: app.to_string(),
-                    depth,
-                    node: n.clone(),
-                });
+                let matched = inside || w.kind.is_none_or(|k| k == n.kind);
+                let depth = if matched && !inside && w.kind.is_some() {
+                    0
+                } else {
+                    depth
+                };
+                if matched {
+                    rows.push(ResRow {
+                        key: format!("{}|{}", w.app, n.uid),
+                        app: w.app.to_string(),
+                        depth,
+                        node: n.clone(),
+                        pods: pods(n, w.children),
+                    });
+                }
                 for c in kids.into_iter().flatten() {
-                    walk(c, depth + 1, app, all, children, rows);
+                    walk(w, c, depth + 1, matched && w.kind.is_some(), rows);
                 }
             }
+            let w = Walk {
+                app: &app,
+                all: self.show_all,
+                kind: self.kind.as_deref(),
+                children: &children,
+            };
             for r in roots {
-                if !self.show_all && kind_rank(&r.kind) >= WORKLOAD_KINDS.len() {
+                if self.kind.is_none()
+                    && !self.show_all
+                    && kind_rank(&r.kind) >= WORKLOAD_KINDS.len()
+                {
                     continue;
                 }
-                walk(r, 0, &app, self.show_all, &children, &mut rows);
+                walk(&w, r, 0, false, &mut rows);
             }
         }
         self.rows = rows;
@@ -461,7 +546,8 @@ impl App {
         }
     }
 
-    fn target(&self, app: &str, node: &Node) -> Result<kube::Target, String> {
+    /// The kube context for an app's destination cluster.
+    fn context(&self, app: &str) -> Result<(String, &ArgoApp), String> {
         let a = self
             .apps
             .get(app)
@@ -482,6 +568,11 @@ impl App {
                 store::data_dir().join("state.json").display()
             )
         })?;
+        Ok((context, a))
+    }
+
+    fn target(&self, app: &str, node: &Node) -> Result<kube::Target, String> {
+        let (context, a) = self.context(app)?;
         Ok(kube::Target {
             context,
             namespace: if node.namespace.is_empty() {
@@ -854,6 +945,13 @@ fn poll(s: &mut App, now: f64, tx: &mut Tx) -> bool {
         {
             s.refresh_app(&app, false);
         }
+        if s.tab == StageTab::Resources
+            && s.apps
+                .get(&app)
+                .is_some_and(|a| a.app.is_some() && !a.usage_loading && now >= a.usage_next)
+        {
+            s.refresh_usage(&app);
+        }
     }
     changed |= s.drain_stream();
     if s.filter.text != s.filtered_for {
@@ -938,6 +1036,11 @@ fn main() {
     let spec = AppSpec {
         scenes: &[
             ("demo", view::demo),
+            ("pods", |s: &mut App| {
+                view::demo(s);
+                s.kind = Some("Pod".into());
+                s.rebuild_rows();
+            }),
             ("pipeline", |s: &mut App| {
                 view::demo(s);
                 s.view = Some(View::Pipeline("shop".into()));
@@ -1052,6 +1155,15 @@ mod tests {
         );
         s.rebuild_rows();
         let pod = s.rows.iter().find(|r| r.node.kind == "Pod").expect("a pod");
+        assert!(
+            pod.pods[0].1 > 0 && pod.pods[0].2 > 0,
+            "no requests for {}",
+            pod.node.name
+        );
+        s.kind = Some("Pod".into());
+        s.rebuild_rows();
+        assert!(s.rows.iter().all(|r| r.node.kind == "Pod" && r.depth == 0));
+        let pod = s.rows[0].clone();
         let t = s.target(&pod.app, &pod.node).unwrap();
         let described = format::describe(&t.describe().unwrap());
         assert!(
@@ -1075,6 +1187,8 @@ mod tests {
             .iter()
             .find(|c| !SIDECARS.contains(&c.as_str()))
             .or(containers.first());
+        let usage = kube::top_pods(&t.context, &t.namespace).unwrap();
+        assert!(usage.contains_key(&t.name), "no usage for {}", t.name);
         let stream = t.logs(c.map(String::as_str), false).unwrap();
         std::thread::sleep(Duration::from_secs(4));
         let (lines, _) = stream.take();

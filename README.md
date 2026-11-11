@@ -33,8 +33,10 @@ It's built with [Rune](https://github.com/anomalyco/rune), like
   sends the current freight to the next stages, and **Abort** stops a running promotion. A
   banner tracks the running promotion step by step.
 - **Resources**: the Argo CD resource tree (Deployments → ReplicaSets → Pods, Jobs, …) with
-  live health, containers, restarts and images. It refreshes every 4 seconds, so a rollout
-  plays out in front of you. Use **All** to include services, config and old ReplicaSets.
+  live health, containers, restarts and images, and CPU and memory as usage / requests
+  (usage from `kubectl top`, summed up to each Deployment). It refreshes every 4 seconds, so
+  a rollout plays out in front of you. Pick a kind (Pods, Services, CronJobs, …) to list just
+  those, or use **All** to include services, config and old ReplicaSets.
 - **Promotions**: each promotion's steps, timing and errors. **History**: the freight the
   stage ran, with verification results.
 - **Sync** and **Hard refresh** for the Argo CD app, and links to the Kargo and Argo CD UIs.
@@ -59,7 +61,7 @@ kargoslop holds no credentials of its own. It uses the CLIs you're already logge
 | --- | --- |
 | `kargo` | projects, warehouses, stages, freight, promotions; promoting |
 | `argocd` | app status, sync, refresh; the resource tree through Argo CD's API with the CLI's saved token |
-| `kubectl` | logs, rollout status, describe, events, YAML, restart, delete |
+| `kubectl` | logs, rollout status, describe, events, YAML, CPU and memory usage, restart, delete |
 
 Each stage names its Argo CD apps in its health status. Each app names its destination
 cluster, which is matched to a kube context ending in that name: Argo CD's

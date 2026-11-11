@@ -3,18 +3,20 @@
 
 use rune::{El, ScrollSpec, col, row, text};
 use rune_kit::{
-    Badge, BadgeVariant, ButtonVariant, Cell, Kit, SegmentedControl, Spinner, Table, TableColumn,
+    Badge, BadgeVariant, ButtonVariant, Cell, Kit, SegmentedControl, Select, Spinner, Table,
+    TableColumn,
 };
 
 use crate::argo::ArgoApp;
 use crate::cli::{age, took};
 use crate::kargo::{ProjectData, Promotion, Stage};
+use crate::kube;
 use crate::view::{
     chip, dot, empty, error, freight_label, health_color, link_button, modal, small_button,
 };
 use crate::{App, Confirm, StageTab};
 
-pub fn view(s: &App, k: &Kit) -> El {
+pub fn view(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let Some((project, st)) = s.stage() else {
         return empty(k, "Loading stage…");
     };
@@ -61,15 +63,34 @@ pub fn view(s: &App, k: &Kit) -> El {
         .child(tabs)
         .child(row().grow(1.0));
     if s.tab == StageTab::Resources {
+        let mut options = vec![ALL_KINDS.to_string()];
+        options.extend(s.kinds());
+        let current = s.kind.clone().unwrap_or_else(|| ALL_KINDS.into());
         bar = bar.child(
-            SegmentedControl::new(&["Workloads", "All"], Some(s.show_all as usize))
-                .width(Some(200.0))
-                .on_pick(|s: &mut App, i, _| {
-                    s.show_all = i == 1;
+            Select::new("kind", &options)
+                .current(Some(&current))
+                .open(s.kind_open)
+                .width(170.0)
+                .on_toggle(|s: &mut App| s.kind_open ^= true)
+                .on_close(|s: &mut App| s.kind_open = false)
+                .on_choose(|s: &mut App, v: &str, _| {
+                    s.kind_open = false;
+                    s.kind = (v != ALL_KINDS).then(|| v.to_string());
                     s.rebuild_rows();
                 })
-                .build(k),
+                .build(k, layer),
         );
+        if s.kind.is_none() {
+            bar = bar.child(
+                SegmentedControl::new(&["Workloads", "All"], Some(s.show_all as usize))
+                    .width(Some(200.0))
+                    .on_pick(|s: &mut App, i, _| {
+                        s.show_all = i == 1;
+                        s.rebuild_rows();
+                    })
+                    .build(k),
+            );
+        }
     }
     let body = match s.tab {
         StageTab::Resources => resources(s, k, st),
@@ -366,6 +387,8 @@ fn resources(s: &App, k: &Kit, st: &Stage) -> El {
     .column(TableColumn::new("name", "Name").flex(3.0).min(240.0))
     .column(TableColumn::new("kind", "Kind").width(120.0))
     .column(TableColumn::new("status", "Status").width(160.0))
+    .column(TableColumn::new("cpu", "CPU").width(110.0))
+    .column(TableColumn::new("mem", "Memory").width(130.0))
     .column(TableColumn::new("info", "Info").flex(1.0).min(120.0))
     .column(TableColumn::new("image", "Image").flex(1.2).min(120.0))
     .column(TableColumn::new("age", "Age").width(70.0))
@@ -382,6 +405,23 @@ fn resources(s: &App, k: &Kit, st: &Stage) -> El {
                 Cell::text(format!("{indent}{}", n.name))
             }
             "kind" => Cell::text(n.kind.clone()).muted(),
+            "cpu" | "mem" => {
+                let Some((used, req, measured)) = usage(s, r, col == "cpu") else {
+                    return Cell::text(String::new());
+                };
+                let f = if col == "cpu" {
+                    kube::fmt_cpu
+                } else {
+                    kube::fmt_mem
+                };
+                let used = if measured { f(used) } else { "–".into() };
+                let text = if req > 0 {
+                    format!("{used} / {}", f(req))
+                } else {
+                    used
+                };
+                Cell::text(text).mono()
+            }
             "status" => {
                 let reason = n.info("Status Reason").unwrap_or(&n.health);
                 let health = if n.health.is_empty() {
@@ -703,4 +743,23 @@ pub fn promote_dialog(s: &App, k: &Kit, layer: &mut Vec<rune::El>, project: &str
         layer,
         640.0,
     );
+}
+
+const ALL_KINDS: &str = "All kinds";
+
+/// Usage and requests summed over the pods at or under a row: (used, requested, any measured).
+fn usage(s: &App, r: &crate::ResRow, cpu: bool) -> Option<(u64, u64, bool)> {
+    if r.pods.is_empty() {
+        return None;
+    }
+    let live = s.apps.get(&r.app).map(|a| &a.usage);
+    let (mut used, mut req, mut measured) = (0, 0, false);
+    for (name, rc, rm) in &r.pods {
+        req += if cpu { rc } else { rm };
+        if let Some((uc, um)) = live.and_then(|u| u.get(name)) {
+            used += if cpu { uc } else { um };
+            measured = true;
+        }
+    }
+    Some((used, req, measured))
 }

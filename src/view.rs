@@ -21,7 +21,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let mut layer = Vec::new();
     let main = match &s.view {
         Some(View::Pipeline(p)) => pipeline::view(s, &k, p),
-        Some(View::Stage(..)) => stage::view(s, &k),
+        Some(View::Stage(..)) => stage::view(s, &k, &mut layer),
         None => empty(
             &k,
             if s.projects.is_empty() {
@@ -717,7 +717,12 @@ pub fn demo(s: &mut App) {
             "shop-api-7c9-abcde",
             Some("r1"),
             "Healthy",
-            &[("Status Reason", "Running"), ("Containers", "2/2")],
+            &[
+                ("Status Reason", "Running"),
+                ("Containers", "2/2"),
+                ("cpu", "300"),
+                ("memory", "553648128000"),
+            ],
         ),
         node(
             "p2",
@@ -728,6 +733,8 @@ pub fn demo(s: &mut App) {
             &[
                 ("Status Reason", "ContainerCreating"),
                 ("Containers", "0/2"),
+                ("cpu", "300"),
+                ("memory", "553648128000"),
             ],
         ),
         node(
@@ -756,6 +763,8 @@ pub fn demo(s: &mut App) {
                 ("Status Reason", "Running"),
                 ("Containers", "2/2"),
                 ("Restart Count", "3"),
+                ("cpu", "1100"),
+                ("memory", "2147483648000"),
             ],
         ),
     ];
@@ -782,6 +791,14 @@ pub fn demo(s: &mut App) {
                 }),
                 nodes: nodes.clone(),
                 next: f64::MAX,
+                usage: [
+                    ("shop-api-7c9-abcde", (42, 410 << 20)),
+                    ("shop-worker-55f-xyz12", (870, 1610 << 20)),
+                ]
+                .into_iter()
+                .map(|(n, u)| (n.to_string(), u))
+                .collect(),
+                usage_next: f64::MAX,
                 ..AppState::default()
             },
         );
