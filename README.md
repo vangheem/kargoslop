@@ -35,8 +35,9 @@ It's built with [Rune](https://github.com/anomalyco/rune), like
 - **Resources**: the Argo CD resource tree (Deployments → ReplicaSets → Pods, Jobs, …) with
   live health, containers, restarts and images, and CPU and memory as usage / requests
   (usage from `kubectl top`, summed up to each Deployment). It refreshes every 4 seconds, so
-  a rollout plays out in front of you. Pick a kind (Pods, Services, CronJobs, …) to list just
-  those, or use **All** to include services, config and old ReplicaSets.
+  a rollout plays out in front of you. Filter by name, status or image (matches keep their
+  owners and what they own), pick a kind (Pods, Services, CronJobs, …) to list just those, or
+  use **All** to include services, config and old ReplicaSets.
 - **Promotions**: each promotion's steps, timing and errors. **History**: the freight the
   stage ran, with verification results.
 - **Sync** and **Hard refresh** for the Argo CD app, and links to the Kargo and Argo CD UIs.

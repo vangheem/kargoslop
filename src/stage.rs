@@ -4,7 +4,7 @@
 use rune::{El, ScrollSpec, col, row, text};
 use rune_kit::{
     Badge, BadgeVariant, ButtonVariant, Cell, Kit, SegmentedControl, Select, Spinner, Table,
-    TableColumn,
+    TableColumn, TextInput,
 };
 
 use crate::argo::ArgoApp;
@@ -54,19 +54,28 @@ pub fn view(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
             s.tab = [StageTab::Resources, StageTab::Promotions, StageTab::History][i.min(2)]
         })
         .build(k);
-    let mut bar = row()
+    let bar = row()
         .w_full()
         .px(16.0)
         .py(8.0)
         .gap(10.0)
         .items_center()
-        .child(tabs)
-        .child(row().grow(1.0));
+        .child(tabs);
+    let mut tools = row().w_full().px(16.0).pb(8.0).gap(10.0).items_center();
     if s.tab == StageTab::Resources {
+        tools = tools.child(
+            col().grow(1.0).min_w(120.0).child(
+                TextInput::new(&s.res_filter)
+                    .placeholder("Filter resources")
+                    .width(None)
+                    .on_edit(|s: &mut App| &mut s.res_filter)
+                    .build(k),
+            ),
+        );
         let mut options = vec![ALL_KINDS.to_string()];
         options.extend(s.kinds());
         let current = s.kind.clone().unwrap_or_else(|| ALL_KINDS.into());
-        bar = bar.child(
+        tools = tools.child(
             Select::new("kind", &options)
                 .current(Some(&current))
                 .open(s.kind_open)
@@ -81,7 +90,7 @@ pub fn view(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
                 .build(k, layer),
         );
         if s.kind.is_none() {
-            bar = bar.child(
+            tools = tools.child(
                 SegmentedControl::new(&["Workloads", "All"], Some(s.show_all as usize))
                     .width(Some(200.0))
                     .on_pick(|s: &mut App, i, _| {
@@ -97,8 +106,11 @@ pub fn view(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         StageTab::Promotions => promotions(k, project, d, st),
         StageTab::History => history(k, d, st),
     };
-    c.child(bar)
-        .child(col().w_full().grow(1.0).min_h(0.0).child(body))
+    let mut c = c.child(bar);
+    if s.tab == StageTab::Resources {
+        c = c.child(tools);
+    }
+    c.child(col().w_full().grow(1.0).min_h(0.0).child(body))
 }
 
 fn actions(k: &Kit, project: &str, d: &ProjectData, st: &Stage) -> El {

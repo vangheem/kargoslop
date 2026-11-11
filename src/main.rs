@@ -157,6 +157,9 @@ struct App {
     /// Only resources of this kind (and what they own).
     kind: Option<String>,
     kind_open: bool,
+    /// Filters the resources table; `res_filtered_for` is the text the rows were built for.
+    res_filter: TextEdit,
+    res_filtered_for: String,
     selected: Option<Selected>,
     pane: Pane,
     out: Output,
@@ -206,6 +209,8 @@ fn init() -> App {
         show_all: false,
         kind: None,
         kind_open: false,
+        res_filter: TextEdit::new(""),
+        res_filtered_for: String::new(),
         selected: None,
         pane: Pane::Logs,
         out: Output::default(),
@@ -538,7 +543,8 @@ impl App {
                 walk(&w, r, 0, false, &mut rows);
             }
         }
-        self.rows = rows;
+        self.res_filtered_for = self.res_filter.text.clone();
+        self.rows = filter_rows(rows, &self.res_filter.text);
         if let Some(sel) = &mut self.selected
             && let Some(r) = self.rows.iter().find(|r| r.key == sel.key)
         {
@@ -875,6 +881,54 @@ impl App {
     }
 }
 
+/// Keeps rows matching `filter`, with their ancestors and descendants so the tree reads.
+fn filter_rows(rows: Vec<ResRow>, filter: &str) -> Vec<ResRow> {
+    let f = filter.trim().to_lowercase();
+    if f.is_empty() {
+        return rows;
+    }
+    let hit = |r: &ResRow| {
+        let n = &r.node;
+        [
+            n.name.as_str(),
+            n.kind.as_str(),
+            n.health.as_str(),
+            n.info("Status Reason").unwrap_or(""),
+        ]
+        .into_iter()
+        .chain(n.images.iter().map(String::as_str))
+        .any(|v| v.to_lowercase().contains(&f))
+    };
+    let mut keep = vec![false; rows.len()];
+    // Indexes of the current row's ancestors, nearest last.
+    let mut stack: Vec<usize> = Vec::new();
+    // Depth of the nearest matching ancestor, while inside its subtree.
+    let mut under: Option<usize> = None;
+    for (i, r) in rows.iter().enumerate() {
+        while stack.last().is_some_and(|&j| rows[j].depth >= r.depth) {
+            stack.pop();
+        }
+        if under.is_some_and(|d| r.depth <= d) {
+            under = None;
+        }
+        if hit(r) {
+            keep[i] = true;
+            for &j in &stack {
+                keep[j] = true;
+            }
+            under.get_or_insert(r.depth);
+        } else if under.is_some() {
+            keep[i] = true;
+        }
+        stack.push(i);
+    }
+    rows.into_iter()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(r, _)| r)
+        .collect()
+}
+
 const WORKLOAD_KINDS: &[&str] = &[
     "Rollout",
     "Deployment",
@@ -954,6 +1008,10 @@ fn poll(s: &mut App, now: f64, tx: &mut Tx) -> bool {
         }
     }
     changed |= s.drain_stream();
+    if s.res_filter.text != s.res_filtered_for {
+        s.rebuild_rows();
+        changed = true;
+    }
     if s.filter.text != s.filtered_for {
         s.refilter();
         changed = true;
@@ -999,8 +1057,11 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     // k9s-style keys for the selected resource, unless typing or in a dialog.
-    let typing =
-        s.filter.focused || s.add.is_some() || s.confirm.is_some() || s.promote_pick.is_some();
+    let typing = s.filter.focused
+        || s.res_filter.focused
+        || s.add.is_some()
+        || s.confirm.is_some()
+        || s.promote_pick.is_some();
     if typing || ev.mods.cmd || ev.mods.ctrl {
         return false;
     }
@@ -1039,6 +1100,11 @@ fn main() {
             ("pods", |s: &mut App| {
                 view::demo(s);
                 s.kind = Some("Pod".into());
+                s.rebuild_rows();
+            }),
+            ("filter", |s: &mut App| {
+                view::demo(s);
+                s.res_filter = TextEdit::new("worker");
                 s.rebuild_rows();
             }),
             ("pipeline", |s: &mut App| {
@@ -1122,6 +1188,49 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_keeps_tree_context() {
+        let row = |name: &str, kind: &str, depth| ResRow {
+            key: name.into(),
+            app: "a".into(),
+            depth,
+            node: Node {
+                uid: name.into(),
+                kind: kind.into(),
+                group: String::new(),
+                name: name.into(),
+                namespace: String::new(),
+                parents: vec![],
+                health: String::new(),
+                health_message: String::new(),
+                info: vec![],
+                images: vec![],
+                created: String::new(),
+            },
+            pods: vec![],
+        };
+        let rows = || {
+            vec![
+                row("api", "Deployment", 0),
+                row("api-7c9", "ReplicaSet", 1),
+                row("api-7c9-x", "Pod", 2),
+                row("worker", "Deployment", 0),
+                row("worker-5f", "ReplicaSet", 1),
+                row("worker-5f-q", "Pod", 2),
+            ]
+        };
+        let names = |rs: Vec<ResRow>| rs.into_iter().map(|r| r.key).collect::<Vec<_>>();
+        assert_eq!(
+            names(filter_rows(rows(), "api")),
+            ["api", "api-7c9", "api-7c9-x"]
+        );
+        assert_eq!(
+            names(filter_rows(rows(), "5f-q")),
+            ["worker", "worker-5f", "worker-5f-q"]
+        );
+        assert_eq!(filter_rows(rows(), "").len(), 6);
+    }
 
     /// Follows a real stage down to a pod's logs:
     /// `KARGO_PROJECT=my-project cargo test -- --ignored`.
